@@ -185,3 +185,249 @@ actions 可以写同步代码和异步代码
 
 ## pinia核心源码分享
 
+#### createPinia
+
+源码位置：`packages/pinia/src/createPinia.ts`
+
+#### PiniaVuePlugin - vue2
+
+源码位置：`packages/pinia/src/vue2-plugin.ts`
+
+[vueX 3.0 - install()](https://github.dev/vuejs/vuex/tree/3.x)
+
+```js
+export function install (_Vue) {
+  if (Vue && _Vue === Vue) {
+    if (__DEV__) {
+      console.error(
+        '[vuex] already installed. Vue.use(Vuex) should be called only once.'
+      )
+    }
+    return
+  }
+  Vue = _Vue
+  applyMixin(Vue)
+}
+
+
+export default function (Vue) {
+  const version = Number(Vue.version.split('.')[0])
+
+  if (version >= 2) {
+    Vue.mixin({ beforeCreate: vuexInit })
+  } else {
+    // override init and inject vuex init procedure
+    // for 1.x backwards compatibility.
+    const _init = Vue.prototype._init
+    Vue.prototype._init = function (options = {}) {
+      options.init = options.init
+        ? [vuexInit].concat(options.init)
+        : vuexInit
+      _init.call(this, options)
+    }
+  }
+
+  /**
+   * Vuex init hook, injected into each instances init hooks list.
+   */
+
+  function vuexInit () {
+    const options = this.$options
+    // store injection
+    if (options.store) {
+      this.$store = typeof options.store === 'function'
+        ? options.store()
+        : options.store
+    } else if (options.parent && options.parent.$store) {
+      this.$store = options.parent.$store
+    }
+  }
+}
+
+```
+
+#### defineStore
+
+源码地址： `packages\pinia\src\store.ts`
+
+```
+├─defineStore
+│  ├─createSetupStore          
+│  ├─createOptionsStore         
+```
+
+defineStore -> useStore -- createSetupStore() --> store
+
+[vueX 3.0 - 响应式](https://github.dev/vuejs/vuex/tree/3.x)
+
+```js
+function resetStoreVM (store, state, hot) {
+  const oldVm = store._vm
+
+  // bind store public getters
+  store.getters = {}
+  // reset local getters cache
+  store._makeLocalGettersCache = Object.create(null)
+  const wrappedGetters = store._wrappedGetters
+  const computed = {}
+  forEachValue(wrappedGetters, (fn, key) => {
+    // use computed to leverage its lazy-caching mechanism
+    // direct inline function use will lead to closure preserving oldVm.
+    // using partial to return function with only arguments preserved in closure environment.
+    computed[key] = partial(fn, store)
+    Object.defineProperty(store.getters, key, {
+      get: () => store._vm[key],
+      enumerable: true // for local getters
+    })
+  })
+
+  // use a Vue instance to store the state tree
+  // suppress warnings just in case the user has added
+  // some funky global mixins
+  const silent = Vue.config.silent
+  Vue.config.silent = true
+  store._vm = new Vue({
+    data: {
+      $$state: state
+    },
+    computed
+  })
+  Vue.config.silent = silent
+
+  // enable strict mode for new vm
+  if (store.strict) {
+    enableStrictMode(store)
+  }
+
+  if (oldVm) {
+    if (hot) {
+      // dispatch changes in all subscribed watchers
+      // to force getter re-evaluation for hot reloading.
+      store._withCommit(() => {
+        oldVm._data.$$state = null
+      })
+    }
+    Vue.nextTick(() => oldVm.$destroy())
+  }
+}
+```
+
+
+
+#### store.$onAction
+
+```js
+$onAction: addSubscription.bind(null, actionSubscriptions),
+```
+
+`$onAction`内部通过发布订阅模式实现。在`pinia`中有个专门的订阅模块`subscriptions.ts`，其中包含两个主要方法：`addSubscription`（添加订阅）、`triggerSubscriptions`（触发订阅）。
+
+**如何触发订阅**
+
+首先在`store`的初始化过程中，会将`action`使用`wrapAction`函数进行包装，`wrapAction`返回一个函数，在这个函数中会先触发`actionSubscriptions`，这个触发过程中会将`afterCallback`、`onErrorCallback`添加到对应列表。然后调用`action`，如果调用过程中出错，则触发`onErrorCallbackList`，否则触发`afterCallbackList`。如果`action`的结果是`Promise`的话，则在`then`中触发`onErrorCallbackList`，在`catch`中触发`onErrorCallbackList`。然后会将包装后的`action`覆盖原始`action`，这样每次调用`action`时就是调用的包装后的`action`。
+
+#### store.$patch
+
+```js
+function $patch(
+  partialStateOrMutator:
+    | _DeepPartial<UnwrapRef<S>>
+    | ((state: UnwrapRef<S>) => void)
+): void {
+  // 合并的相关信息
+  let subscriptionMutation: SubscriptionCallbackMutation<S>
+  // 是否触发状态修改后的回调，isListening代表异步触发，isSyncListening代表同步触发
+  // 此处先关闭回调的触发，防止修改state的过程中频繁触发回调
+  isListening = isSyncListening = false
+  if (__DEV__) {
+    debuggerEvents = []
+  }
+  // 如果partialStateOrMutator是个function，执行方法，传入当前的store
+  if (typeof partialStateOrMutator === 'function') {
+    partialStateOrMutator(pinia.state.value[$id] as UnwrapRef<S>)
+    subscriptionMutation = {
+      type: MutationType.patchFunction,
+      storeId: $id,
+      events: debuggerEvents as DebuggerEvent[],
+    }
+  } else { // 如果不是function，则调用mergeReactiveObjects合并state
+    mergeReactiveObjects(pinia.state.value[$id], partialStateOrMutator)
+    subscriptionMutation = {
+      type: MutationType.patchObject,
+      payload: partialStateOrMutator,
+      storeId: $id,
+      events: debuggerEvents as DebuggerEvent[],
+    }
+  }
+  // 当合并完之后，将isListening、isSyncListening设置为true，意味着可以触发状态改变后的回调函数了
+  const myListenerId = (activeListener = Symbol())
+  nextTick().then(() => {
+    if (activeListener === myListenerId) {
+      isListening = true
+    }
+  })
+  isSyncListening = true
+  // 因为在修改pinia.state.value[$id]的过程中关闭（isSyncListening与isListening）了监听，所以需要手动触发订阅列表
+  triggerSubscriptions(
+    subscriptions,
+    subscriptionMutation,
+    pinia.state.value[$id] as UnwrapRef<S>
+  )
+}
+```
+
+#### store.$reset
+
+```js
+// 只在options配置下有效
+store.$reset = function $reset() {
+    // 重新执行state，获取一个新的state
+    const newState = state ? state() : {}
+    // 通过$patch，使用assign将newState合并到$state中
+    this.$patch(($state) => {
+    	assign($state, newState)
+    })
+}
+```
+
+#### store.$subscribe
+
+```js
+$subscribe(callback, options = {}) {
+    // 将callback添加到subscriptions中，以便使用$patch更新状态时，触发回调
+    // 当使用removeSubscription移除callback时，停止对pinia.state.value[$id]监听
+    const removeSubscription = addSubscription(
+        subscriptions,
+        callback,
+        options.detached,
+        () => stopWatcher()
+    )
+    const stopWatcher = scope.run(() =>
+                                  // 监听pinia.state.value[$id]，以触发callback，当使用$patch更新state时，不会进入触发这里的callback
+                                  watch(
+        () => pinia.state.value[$id] as UnwrapRef<S>,
+        (state) => {
+        // options.flush === 'sync' 是否同步触发回调
+        if (options.flush === 'sync' ? isSyncListening : isListening) {
+            callback(
+                {
+                    storeId: $id,
+                    type: MutationType.direct,    // 表示是通过什么方式更新的state
+                    events: debuggerEvents as DebuggerEvent,
+                },
+                state
+            )
+            /** MutationType.direct：通过state.name='xxx'/store.$state.name='xxx'等方式修改
+                  MutationType.patchObject：通过store.$patch({ name: 'xxx' })方式修改
+                  MutationType.patchFunction：通过store.$patch((state) =&gt; state.name='xxx')方式修改 
+              */
+        }
+    },
+                                  assign({}, $subscribeOptions, options)
+                                 )
+    )!
+
+        return removeSubscription
+},
+```
+
