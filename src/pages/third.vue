@@ -36,6 +36,7 @@ export default {
         // ...mapWritableState(userStore, ['count', 'foo', 'bar']),
 
         ...mapGetters(userStore, ['foobar', 'foobar10'])
+        // ...mapState(userStore, ['foobar', 'foobar10'])
     },
 
     methods: {

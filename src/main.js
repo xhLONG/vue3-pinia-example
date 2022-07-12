@@ -8,13 +8,14 @@ import localstoragePlugin from './store/localstoragePlugin'
 const pinia = createPinia();
 
 // pinia插件
-// function SecretPiniaPlugin() {
-//     return { secret: 'the cake is a lie' }
-// }
-// pinia.use(SecretPiniaPlugin);
+function SecretPiniaPlugin(context) {
+    console.log(context);
+    return { secret: 'the cake is a lie' }
+}
+pinia.use(SecretPiniaPlugin);
 
 pinia.use(localstoragePlugin('user'));
-pinia.use(localstoragePlugin('goods'));
+// pinia.use(localstoragePlugin('goods'));
 
 const app = createApp(App);
 app.use(pinia);

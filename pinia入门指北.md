@@ -431,3 +431,226 @@ $subscribe(callback, options = {}) {
 },
 ```
 
+#### store.$dispose
+
+销毁pinia容器
+
+```js
+function $dispose() {
+    // 停止监听
+    scope.stop()
+    // 清空subscriptions及actionSubscriptions
+    subscriptions = []
+    actionSubscriptions = []
+    // 从pinia._s中删除store
+    pinia._s.delete($id)
+}
+```
+
+#### 总结
+
+`defineStore`返回一个`useStore`函数，通过执行`useStore`可以获取对应的`store`。调用`useStore`时我们并没有传入`id`，为什么能准确获取`store`呢？这是因为`useStore`是个闭包，在执行`useStore`执行过程中会自动获取`id`。
+
+获取`store`的过程：
+
+1. 首先获取组件实例
+2. 使用`inject(piniaSymbol)`获取`pinia`实例
+3. 判断`pinia._s`中是否有对应`id`的键，如果有直接取对应的值作为`store`，如果没有则创建`store`
+
+`store`创建流程分两种：`setup`方式与`options`方式
+
+`setup`方式：
+
+1. 首先在`pinia.state.value`中添加键为`$id`的空对象，以便后续赋值
+2. 使用`reactive`声明一个响应式对象`store`
+3. 将`store`存至`pinia._s`中
+4. 执行`setup`获取返回值`setupStore`
+5. 遍历`setupStore`的键值，如果值是`ref`（不是`computed`）或`reactive`，将键值添加到`pinia.state.value[$id]`中；如果值时`function`，首先将值使用`wrapAction`包装，然后用包装后的`function`替换`setupStore`中对应的值
+6. 将`setupStore`合并到`store`中
+7. 拦截`store.$state`，使`get`操作可以正确获取`pinia.state.value[$id]`，`set`操作使用`this.$patch`更新
+8. 调用`pinia._p`中的扩展函数，扩展`store`
+
+`options`方式：
+
+1. 从`options`中提取`state`、`getter`、`actions`
+2. 构建`setup`函数，在`setup`函数中会将`getter`处理成计算属性
+3. 使用`setup`方式创建`store`
+4. 重写`store.$reset`
+
+
+
+#### storeToRefs
+
+当使用`store`的过程中，如果直接对`store`进行解构，会破坏数据的响应，所以`pinia`提供了`storeToRefs`用来进行解构。
+
+```js
+export function storeToRefs<SS extends StoreGeneric>(
+  store: SS
+): ToRefs<
+  StoreState<SS> & StoreGetters<SS> & PiniaCustomStateProperties<StoreState<SS>>
+> {
+  // See https://github.com/vuejs/pinia/issues/852
+  // It's easier to just use toRefs() even if it includes more stuff
+  if (isVue2) {
+    // @ts-expect-error: toRefs include methods and others
+    return toRefs(store)
+  } else {
+    // store的原始对象
+    store = toRaw(store)
+
+    const refs = {} as ToRefs<
+      StoreState<SS> &
+        StoreGetters<SS> &
+        PiniaCustomStateProperties<StoreState<SS>>
+    >
+    for (const key in store) {
+      const value = store[key]
+      if (isRef(value) || isReactive(value)) {
+        // @ts-expect-error: the key is state or getter
+        refs[key] =
+          // ---
+          toRef(store, key)
+      }
+    }
+
+    return refs
+  }
+}
+```
+
+### mapHelper
+
+源码位置：packages\pinia\src\mapHelpers.ts
+
+#### mapState
+
+```js
+export function mapState<
+  Id extends string,
+  S extends StateTree,
+  G extends _GettersTree<S>,
+  A
+>(
+  useStore: StoreDefinition<Id, S, G, A>,
+  keysOrMapper: any
+): _MapStateReturn<S, G> | _MapStateObjectReturn<Id, S, G, A> {
+  return Array.isArray(keysOrMapper)
+    ? keysOrMapper.reduce((reduced, key) => {
+        reduced[key] = function (this: ComponentPublicInstance) {
+          return useStore(this.$pinia)[key]
+        } as () => any
+        return reduced
+      }, {} as _MapStateReturn<S, G>)
+    : Object.keys(keysOrMapper).reduce((reduced, key: string) => {
+        // @ts-expect-error
+        reduced[key] = function (this: ComponentPublicInstance) {
+          const store = useStore(this.$pinia)
+          const storeKey = keysOrMapper[key]
+          // for some reason TS is unable to infer the type of storeKey to be a
+          // function
+          return typeof storeKey === 'function'
+            ? (storeKey as (store: Store<Id, S, G, A>) => any).call(this, store)
+            : store[storeKey]
+        }
+        return reduced
+      }, {} as _MapStateObjectReturn<Id, S, G, A>)
+}
+```
+
+
+
+#### mapWritableState
+
+```js
+export function mapWritableState<
+  Id extends string,
+  S extends StateTree,
+  G extends _GettersTree<S>,
+  A,
+  KeyMapper extends Record<string, keyof S>
+>(
+  useStore: StoreDefinition<Id, S, G, A>,
+  keysOrMapper: Array<keyof S> | KeyMapper
+): _MapWritableStateReturn<S> | _MapWritableStateObjectReturn<S, KeyMapper> {
+  return Array.isArray(keysOrMapper)
+    ? keysOrMapper.reduce((reduced, key) => {
+        // @ts-ignore
+        reduced[key] = {
+          get(this: ComponentPublicInstance) {
+            return useStore(this.$pinia)[key]
+          },
+          set(this: ComponentPublicInstance, value) {
+            // it's easier to type it here as any
+            return (useStore(this.$pinia)[key] = value as any)
+          },
+        }
+        return reduced
+      }, {} as _MapWritableStateReturn<S>)
+    : Object.keys(keysOrMapper).reduce((reduced, key: keyof KeyMapper) => {
+        // @ts-ignore
+        reduced[key] = {
+          get(this: ComponentPublicInstance) {
+            return useStore(this.$pinia)[keysOrMapper[key]]
+          },
+          set(this: ComponentPublicInstance, value) {
+            // it's easier to type it here as any
+            return (useStore(this.$pinia)[keysOrMapper[key]] = value as any)
+          },
+        }
+        return reduced
+      }, {} as _MapWritableStateObjectReturn<S, KeyMapper>)
+}
+```
+
+
+
+#### mapActions
+
+```js
+export function mapActions<
+  Id extends string,
+  S extends StateTree,
+  G extends _GettersTree<S>,
+  A,
+  KeyMapper extends Record<string, keyof A>
+>(
+  useStore: StoreDefinition<Id, S, G, A>,
+  keysOrMapper: Array<keyof A> | KeyMapper
+): _MapActionsReturn<A> | _MapActionsObjectReturn<A, KeyMapper> {
+  return Array.isArray(keysOrMapper)
+    ? keysOrMapper.reduce((reduced, key) => {
+        // @ts-expect-error
+        reduced[key] = function (
+          this: ComponentPublicInstance,
+          ...args: any[]
+        ) {
+          return useStore(this.$pinia)[key](...args)
+        }
+        return reduced
+      }, {} as _MapActionsReturn<A>)
+    : Object.keys(keysOrMapper).reduce((reduced, key: keyof KeyMapper) => {
+        // @ts-expect-error
+        reduced[key] = function (
+          this: ComponentPublicInstance,
+          ...args: any[]
+        ) {
+          return useStore(this.$pinia)[keysOrMapper[key]](...args)
+        }
+        return reduced
+      }, {} as _MapActionsObjectReturn<A, KeyMapper>)
+}
+```
+
+
+
+#### mapGetter
+
+```js
+export const mapGetters = mapState
+```
+
+
+
+#### 总结
+
+`mapStores`、`mapState`、`mapActions`等辅助函数会在内部通过调用`useStore`（在`useStore`调用时会传入`this.$pinia`，`this`为组件实例，这也是为什么辅助函数不能用在`setup`中，因为`setup`中是无法获取组件实例）获取`store`，然后在`store`中获取对应属性。

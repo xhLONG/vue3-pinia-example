@@ -23,7 +23,13 @@
   -moz-osx-font-smoothing: grayscale;
   text-align: center;
   color: #2c3e50;
-  font-size: 28px;
+  font-size: 36px;
+}
+
+button{
+  font-size: 30px;
+  margin: 0 10px;
+  cursor: pointer;
 }
 
 nav{
