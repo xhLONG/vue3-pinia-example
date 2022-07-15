@@ -179,7 +179,7 @@ actions 可以写同步代码和异步代码
 
 ## pinia的基本使用
 
-
+示例项目https://github.com/xhLONG/vue3-pinia-example
 
 
 
@@ -193,7 +193,7 @@ actions 可以写同步代码和异步代码
 
 源码位置：`packages/pinia/src/vue2-plugin.ts`
 
-[vueX 3.0 - install()](https://github.dev/vuejs/vuex/tree/3.x)
+[vueX 3.0 - install()](https://github.dev/vuejs/vuex/tree/3.x) 部分代码
 
 ```js
 export function install (_Vue) {
@@ -258,7 +258,7 @@ export default function (Vue) {
 
 defineStore -> useStore -- createSetupStore() --> store
 
-[vueX 3.0 - 响应式](https://github.dev/vuejs/vuex/tree/3.x)
+[vueX 3.0 - 响应式](https://github.dev/vuejs/vuex/tree/3.x) 部分代码
 
 ```js
 function resetStoreVM (store, state, hot) {

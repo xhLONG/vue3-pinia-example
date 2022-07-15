@@ -33,8 +33,8 @@
 
 <script setup>
 import { computed, defineComponent } from "vue";
-import { userStore } from "../store/userStore";
 import { storeToRefs } from "pinia";
+import { userStore } from "../store/userStore";
 
 const store = userStore();
 console.log(store.count);

@@ -49,6 +49,10 @@ export default {
         },
 
         ...mapActions(userStore, ['resetState', 'increate']),
+    },
+
+    created() {
+
     }
 }
 </script>
